@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0"
+    />
+
+    <style>
+      * {
+        padding: 0;
+        margin: 0;
+        box-sizing: border-box;
+      }
+
+      .adjust-buttons > button:hover {
+        background-color: transparent;
+        cursor: grab;
+      }
+
+      .adjust-buttons > button:active {
+        cursor: grabing;
+      }
+
+      pre {
+        transform-origin: top left;
+      }
+
+      pre.full-screen {
+        width: 100%;
+        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      pre.full-screen > svg {
+        width: 100%;
+        height: 100%;
+        max-width: 100% !important;
+        max-height: calc(100% - 8px) !important;
+      }
+
+      body {
+        position: relative;
+        height: 100%;
+      }
+
+      .actions {
+        position: fixed;
+        right: 0;
+        top: 0;
+        z-index: 1;
+        border-radius: 5px;
+        background-color: #e2e3e4;
+        display: grid;
+        grid-template-columns: 1fr auto 1fr 1fr auto 1fr;
+        justify-content: space-between;
+        align-items: center;
+        column-gap: 5px;
+      }
+
+      .actions > button {
+        border: none;
+        border-radius: 5px;
+        background-color: transparent;
+        position: relative;
+        aspect-ratio: 1 / 1;
+        padding: 0.5em;
+        display: flex;
+      }
+
+      .actions > button:hover {
+        background-color: #bcbcbc;
+      }
+
+      button:hover {
+        cursor: grab;
+      }
+
+      button:active {
+        cursor: grabbing;
+      }
+
+      .action-spacer {
+        width: 2px;
+        height: 1em;
+        background-color: #bcbcbc;
+      }
+
+      #mermaid-code {
+        display: inline-block;
+      }
+
+      #fullscreen > span::after {
+        content: "\f1ce";
+      }
+
+      #fullscreen > span.full-screen::after {
+        content: "\f1cf";
+      }
+
+      .tab-container {
+        display: grid;
+        grid-template-rows: auto 1fr;
+        height: 100%;
+      }
+
+      .tab-container .tab-content {
+        overflow: auto;
+        height: 100%;
+      }
+
+      .tab-container .tab-header {
+        display: grid;
+        grid-template-columns: auto auto 1fr;
+        gap: 0.5em;
+      }
+
+      .tab-container .tab-header > * {
+        background-color: #e2e3e4;
+        border: none;
+        border-radius: 5px;
+        position: relative;
+        aspect-ratio: 1 / 1;
+        padding: 0.5em;
+        display: flex;
+      }
+
+      .tab-container .tab-header > .active {
+        background-color: #bcbcbc;
+      }
+
+      .tab-container > .tab-content > *:not(.active) {
+        display: none !important;
+      }
+
+      .raw-code {
+        padding: 1em;
+        background-color: #bcbcbc;
+        text-align: left;
+        width: 100%;
+        height: calc(100% - 1em);
+        margin-top: 1em;
+        color: black;
+      }
+
+      #mermaid-code-container {
+        scrollbar-width: none;
+        overflow: auto;
+        height: 100%;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="actions">
+      <button id="recenter" tooltip="reset zoom">
+        <span class="material-symbols-outlined"> recenter </span>
+      </button>
+      <div class="action-spacer"></div>
+      <button class="adjust-scale minus">
+        <span class="material-symbols-outlined"> zoom_out </span>
+      </button>
+      <button class="adjust-scale plus">
+        <span class="material-symbols-outlined"> zoom_in </span>
+      </button>
+      <div class="action-spacer"></div>
+      <button id="fullscreen" tooltip="enter expanded mode">
+        <span class="material-symbols-outlined [[FULL_SCREEN_CLASS]]"></span>
+      </button>
+    </div>
+    <div class="tab-container">
+      <div class="tab-header">
+        <button>
+          <span class="material-symbols-outlined">insert_chart</span>
+        </button>
+        <button>
+          <span class="material-symbols-outlined">code</span>
+        </button>
+      </div>
+
+      <div class="tab-content">
+        <div id="mermaid-code-container">
+          <pre class="mermaid [[FULL_SCREEN_CLASS]]" id="mermaid-code">
+[[MERMAID_CODE]]</pre
+          >
+          <pre id="error-message" style="display: none; overflow: auto"></pre>
+        </div>
+        <div class="raw-code">
+          <pre>[[MERMAID_CODE]]</pre>
+        </div>
+      </div>
+    </div>
+
+    <script type="module">
+      import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+      mermaid.initialize({ startOnLoad: true });
+      mermaid.parseError = (err, hash) => {
+        const errEl = document.querySelector("#error-message");
+        errEl.style.display = "";
+        errEl.innerText = err.message;
+      };
+    </script>
+
+    <!-- This script handles tabs -->
+    <script>
+      const tabContainers = document.querySelectorAll(".tab-container");
+      for (const container of tabContainers) {
+        const containerHeaders = [
+          ...container.querySelectorAll(".tab-header > *"),
+        ];
+        const containerContents = [
+          ...container.querySelectorAll(".tab-content > *"),
+        ];
+
+        if (containerHeaders.length !== containerContents.length) {
+          console.error(
+            "Invalid tab container configuration. There must be the same number of headers and content items.",
+            container
+          );
+          continue;
+        }
+
+        let canChangeTabs = false;
+        setTimeout(() => {
+          canChangeTabs = true;
+        }, 2_500);
+
+        containerHeaders.forEach((headerItem, i) => {
+          if (i === 0) {
+            headerItem.classList.add("active");
+            containerContents[0].classList.add("active");
+          }
+
+          headerItem.addEventListener("click", () => {
+            if (!canChangeTabs) return;
+            containerContents.forEach((content, contentI) => {
+              if (contentI === i) {
+                content.classList.add("active");
+                containerHeaders[contentI].classList.add("active");
+                return;
+              }
+
+              content.classList.remove("active");
+              containerHeaders[contentI].classList.remove("active");
+            });
+          });
+        });
+      }
+    </script>
+
+    <script>
+      const pre = document.querySelector("pre");
+      const [minusButton, plusButton] = [
+        ...document.querySelectorAll(".adjust-scale"),
+      ];
+
+      const changeScale = ({ increment, factor, scale }) => {
+        if (
+          increment === undefined &&
+          factor === undefined &&
+          scale === undefined
+        ) {
+          throw new Error("increment, factor or scale must be provided");
+        }
+
+        let currentScale = parseFloat(pre.getAttribute("x-data-scale") ?? "1");
+        if (increment !== undefined) {
+          currentScale = increment ? currentScale + 0.2 : currentScale - 0.2;
+        } else if (factor !== undefined) {
+          currentScale = currentScale * factor;
+        } else {
+          currentScale = scale;
+        }
+        currentScale = Math.round(currentScale * 100) / 100;
+
+        if (currentScale <= 0) return;
+        pre.setAttribute("x-data-scale", currentScale + "");
+        pre.style.scale = currentScale + "";
+      };
+
+      minusButton.onclick = () => changeScale({ increment: false });
+      plusButton.onclick = () => changeScale({ increment: true });
+
+      document.addEventListener(
+        "wheel",
+        (e) => {
+          if (!e.ctrlKey) return;
+          e.preventDefault();
+          changeScale({ factor: event.deltaY < 0 ? 1.05 : 0.95 });
+        },
+        { passive: false }
+      );
+
+      document.getElementById("recenter").onclick = () => {
+        changeScale({ scale: 1 });
+      };
+
+      /**
+       * drag to scroll logic
+       */
+
+      /**
+       * @type {HTMLElement}
+       */
+      const codeContainer = document.querySelector("#mermaid-code-container");
+
+      let isDragging = false;
+      let startX;
+      let startY;
+      let scrollLeft;
+      let scrollTop;
+
+      codeContainer.addEventListener("mousedown", (e) => {
+        isDragging = true;
+        startX = e.pageX - codeContainer.offsetLeft;
+        startY = e.pageY - codeContainer.offsetTop;
+        scrollLeft = codeContainer.scrollLeft;
+        scrollTop = codeContainer.scrollTop;
+      });
+
+      codeContainer.addEventListener("mouseleave", () => {
+        isDragging = false;
+      });
+
+      codeContainer.addEventListener("mouseup", () => {
+        isDragging = false;
+      });
+
+      codeContainer.addEventListener("mousemove", (e) => {
+        if (!isDragging) return;
+        e.preventDefault();
+        const x = e.pageX - codeContainer.offsetLeft;
+        const y = e.pageY - codeContainer.offsetTop;
+        const walkX = x - startX;
+        const walkY = y - startY;
+        codeContainer.scrollLeft = scrollLeft - walkX;
+        codeContainer.scrollTop = scrollTop - walkY;
+      });
+    </script>
+  </body>
+</html>
