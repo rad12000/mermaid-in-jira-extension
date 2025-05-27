@@ -22,19 +22,14 @@
         cursor: grabing;
       }
 
-      pre {
+      pre:not(.pre-code) {
         transform-origin: top left;
-      }
-
-      pre.full-screen {
         width: 100%;
         height: 100%;
         display: flex;
-        align-items: center;
-        justify-content: center;
       }
 
-      pre.full-screen > svg {
+      pre > svg {
         width: 100%;
         height: 100%;
         max-width: 100% !important;
@@ -107,8 +102,8 @@
       }
 
       .tab-container .tab-content {
-        overflow: auto;
         height: 100%;
+        overflow: hidden;
       }
 
       .tab-container .tab-header {
@@ -139,16 +134,34 @@
         padding: 1em;
         background-color: #bcbcbc;
         text-align: left;
-        width: 100%;
-        height: calc(100% - 1em);
         margin-top: 1em;
         color: black;
+        overflow: auto;
+        width: 100%;
       }
 
       #mermaid-code-container {
         scrollbar-width: none;
-        overflow: auto;
         height: 100%;
+        width: 100%;
+        overflow: auto;
+      }
+
+      #mermaid-code-container > #error-message {
+        display: none;
+      }
+
+      .error#mermaid-code-container > #error-message {
+        display: block !important;
+      }
+
+      .error#mermaid-code-container {
+        display: grid;
+        grid-template-rows: auto 1fr;
+      }
+
+      body {
+        overflow: hidden;
       }
     </style>
   </head>
@@ -179,27 +192,103 @@
         </button>
       </div>
 
-      <div class="tab-content">
+      <div class="tab-content" style="display: flex; justify-content: center">
         <div id="mermaid-code-container">
-          <pre class="mermaid [[FULL_SCREEN_CLASS]]" id="mermaid-code">
-[[MERMAID_CODE]]</pre
-          >
+          <pre id="mermaid-code"><div id="diagram-placeholder"></div></pre>
           <pre id="error-message" style="display: none; overflow: auto"></pre>
         </div>
         <div class="raw-code">
-          <pre>[[MERMAID_CODE]]</pre>
+          <pre class="pre-code"></pre>
         </div>
       </div>
     </div>
 
     <script type="module">
       import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
-      mermaid.initialize({ startOnLoad: true });
-      mermaid.parseError = (err, hash) => {
-        const errEl = document.querySelector("#error-message");
-        errEl.style.display = "";
-        errEl.innerText = err.message;
-      };
+
+      let windowId;
+      const outgoingMessagePool = [];
+      function postMessage(msg) {
+        if (!windowId) {
+          outgoingMessagePool.push(msg);
+          return;
+        }
+
+        console.error("posting", msg);
+        window.parent.postMessage({ ...msg, windowId });
+      }
+
+      const waitingMessages = {};
+      function waitForMessage(messageType, callback) {
+        let resolve;
+        const currentlyWaiting = waitingMessages[messageType] ?? [];
+        currentlyWaiting.push((eventData) => {
+          if (callback) {
+            callback(eventData);
+          }
+          resolve();
+        });
+        waitingMessages[messageType] = currentlyWaiting;
+
+        return new Promise((resolver) => {
+          resolve = resolver;
+        });
+      }
+
+      function notifyOfMessage(eventData) {
+        const { type } = eventData ?? {};
+        if (!type) return;
+        const pending = waitingMessages[type];
+        if (!pending) return;
+        while (1) {
+          const callback = pending.pop();
+          if (!callback) return;
+          callback(eventData);
+        }
+      }
+
+      window.addEventListener("message", (e) => {
+        if (!("type" in e.data)) return;
+
+        switch (e.data.type) {
+          case "WINDOW_ID":
+            windowId = e.data.value;
+            for (const msg of outgoingMessagePool) {
+              postMessage(msg);
+            }
+            break;
+          default:
+            notifyOfMessage(e.data);
+        }
+      });
+
+      async function renderMermaid() {
+        const mermaidCode = JSON.parse([[MERMAID_CODE]]);
+        const mermaidCodeEl = document.getElementById("mermaid-code");
+        mermaidCodeEl.textContent = mermaidCode;
+        document.querySelector(".pre-code").textContent = mermaidCode;
+
+        postMessage({ type: "BEFORE_RENDER" });
+        await waitForMessage("BEFORE_RENDER_ACK");
+
+        mermaid.initialize({ startOnLoad: false });
+        mermaid.parseError = (err, hash) => {
+          const errEl = document.querySelector("#error-message");
+          errEl.innerText = err.message;
+          errEl.parentElement.classList.add("error");
+          console.error(err);
+        };
+
+        const { svg } = await mermaid.render(
+          "diagram-placeholder",
+          mermaidCode
+        );
+
+        mermaidCodeEl.innerHTML = svg;
+        postMessage({ type: "AFTER_RENDER" });
+      }
+
+      renderMermaid();
     </script>
 
     <!-- This script handles tabs -->
@@ -221,11 +310,6 @@
           continue;
         }
 
-        let canChangeTabs = false;
-        setTimeout(() => {
-          canChangeTabs = true;
-        }, 2_500);
-
         containerHeaders.forEach((headerItem, i) => {
           if (i === 0) {
             headerItem.classList.add("active");
@@ -233,7 +317,6 @@
           }
 
           headerItem.addEventListener("click", () => {
-            if (!canChangeTabs) return;
             containerContents.forEach((content, contentI) => {
               if (contentI === i) {
                 content.classList.add("active");

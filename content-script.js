@@ -2,8 +2,13 @@ const mermaidViewHTMLPromise = fetch(
   chrome.runtime.getURL("mermaid-view.html")
 ).then((res) => res.text());
 
-const renderMermaidError =
-  "Unable to find source-code formatter for language: mermaid.";
+async function checksum(str) {
+  const buffer = new TextEncoder().encode(str);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", buffer);
+  return [...new Uint8Array(hashBuffer)]
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
 
 /**
  * @param {HTMLElement} parent
@@ -40,53 +45,74 @@ function findReadModeCodeBlocks(parent) {
   return blocks;
 }
 
-/**
- * @param {HTMLElement} parent
- * @returns {{elToReplace: HTMLElement, mermaidCode: string}[]}
- */
-function findWriteModeCodeBlocks(parent) {
-  /**
-   * @type {NodeListOf<HTMLIFrameElement>}
-   */
-  const iframes = parent.querySelectorAll("iframe");
-  const result = [];
-  for (const iframe of iframes) {
-    try {
-      if (!iframe.contentDocument) continue;
-      const errorCodeBlocks = iframe.contentDocument.querySelectorAll(
-        ".code.panel > .error"
-      );
-
-      for (const errorEl of errorCodeBlocks) {
-        if (errorEl.textContent !== renderMermaidError) continue;
-        const mermaidCode = errorEl.parentElement.textContent.replace(
-          /^Unable.+yaml/,
-          ""
-        );
-
-        result.push({ mermaidCode, elToReplace: errorEl.parentElement });
-      }
-    } catch (e) {
-      console.warn(e);
-    }
-
-    return result;
-  }
-
-  return result;
-}
-
 async function renderMermaidCode(parent = document) {
   const codeBlocks = [findReadModeCodeBlocks].map((fn) => fn(parent)).flat();
 
   const promises = [];
   for (const block of codeBlocks) {
-    const div = document.createElement("span");
-    block.elToReplace.replaceWith(div);
+    const details = document.createElement("details");
+    const summary = document.createElement("summary");
+    const div = document.createElement("div");
+
+    const title = parseTitle(block.mermaidCode);
+
+    summary.innerText = `${
+      !title ? "" : title + " - A "
+    }Mermaid Diagram (Powered by the "Jira Mermaid" Chrome Extension)`;
+
+    details.append(summary, div);
+    details.open = false;
+    details.onclick = (e) => {
+      e.stopPropagation();
+    };
+
+    block.elToReplace.replaceWith(details);
+
+    const style = document.createElement("style");
+    style.innerText = `
+      details:open > summary {
+        padding-bottom: 1em;
+        position: relative;
+      }
+
+      details > summary {
+        display: flex;
+        align-items: center;
+      }
+
+      details > summary:hover {
+        cursor: grab;
+      }
+
+      details > summary::before {
+        display: inline-block;
+        content: '\\279C';
+        margin-right: 1em;
+        font-size: 2em;
+        transition: transform 100ms;
+      }
+
+      details:open > summary::before {
+        transform: rotate(90deg);
+      }
+    `;
+    details.before(style);
+
+    let lastOpenState = details.open;
     promises.push(
       drawMermaidDiagram(div, block.mermaidCode, {
         fullScreen: false,
         enterFullScreen,
+        beforeRender: () => {
+          lastOpenState = details.open;
+          details.open = true;
+          return new Promise((resolve) => {
+            resolve();
+          });
+        },
+        afterRender: () => {
+          details.open = lastOpenState;
+        },
       })
     );
   }
@@ -112,6 +138,45 @@ async function enterFullScreen(code) {
 }
 
 /**
+ * @param {string} code
+ */
+function parseTitle(code) {
+  const titleRegex = /^---\n.*^title:(\s|)(?<title>.*?$).*\n---/ms;
+  const matches = titleRegex.exec(code);
+  if (!matches) return;
+  return matches.groups["title"];
+}
+
+let iframeId = 0;
+
+/**
+ * @type {Map<number, {afterRender: () => void; beforeRender: () => void; target: HTMLIFrameElement}>}
+ */
+const windowIdToHooks = new Map();
+
+window.addEventListener("message", (e) => {
+  if (Array.isArray(e.data) || typeof e.data !== "object") return;
+
+  const { type, windowId } = e.data ?? {};
+  if (!type || !windowId) return;
+  const hooks = windowIdToHooks.get(windowId);
+  if (!hooks) return;
+
+  switch (type) {
+    case "AFTER_RENDER":
+      if (!hooks.afterRender) return;
+      hooks.afterRender();
+      break;
+    case "BEFORE_RENDER":
+      if (!hooks.afterRender) return;
+      Promise.resolve(hooks.beforeRender()).then(() => {
+        hooks.target.contentWindow.postMessage({ type: "BEFORE_RENDER_ACK" });
+      });
+      break;
+  }
+});
+
+/**
  *
  * @param {HTMLElement} parent
  * @param {string} code
@@ -120,33 +185,34 @@ async function enterFullScreen(code) {
 async function drawMermaidDiagram(
   parent,
   code,
-  { fullScreen, enterFullScreen, exitFullScreen }
+  { fullScreen, enterFullScreen, exitFullScreen, afterRender, beforeRender }
 ) {
+  iframeId++;
+  const windowId = iframeId;
+
   const mermaidViewHTML = (await mermaidViewHTMLPromise)
-    .replaceAll("[[MERMAID_CODE]]", code)
+    .replaceAll("[[MERMAID_CODE]]", JSON.stringify(JSON.stringify(code)))
     .replaceAll("[[FULL_SCREEN_CLASS]]", fullScreen ? "full-screen" : "");
 
   const iframe = document.createElement("iframe");
+  windowIdToHooks.set(windowId, { afterRender, target: iframe, beforeRender });
+
   iframe.srcdoc = mermaidViewHTML;
   iframe.style.border = "none";
-  if (fullScreen) {
-    iframe.style.width = "100%";
-    iframe.style.height = "calc(100% - 10px)";
-  }
+  iframe.style.width = "100%";
+  iframe.style.height = "100%";
 
   parent.append(iframe);
 
-  iframe.onload = () => {
-    const pre = iframe.contentDocument.querySelector("pre");
-    const tabHeader = iframe.contentDocument.querySelector(
-      ".tab-container .tab-header"
-    );
+  if (!fullScreen) {
+    parent.style.aspectRatio = "1 / 1";
+  }
 
-    if (fullScreen) {
-      const htmlEl = iframe.contentDocument.querySelector("html");
-      htmlEl.style.width = "100%";
-      htmlEl.style.height = "100%";
-    }
+  iframe.onload = () => {
+    iframe.contentWindow.postMessage({ type: "WINDOW_ID", value: windowId });
+    const htmlEl = iframe.contentDocument.querySelector("html");
+    htmlEl.style.width = "100%";
+    htmlEl.style.height = "100%";
 
     iframe.contentDocument.querySelector("#fullscreen").onclick = () => {
       if (enterFullScreen) {
@@ -157,20 +223,6 @@ async function drawMermaidDiagram(
         exitFullScreen();
       }
     };
-
-    let timeoutId;
-    const obs = new MutationObserver(() => {
-      if (!fullScreen) {
-        iframe.height = pre.offsetHeight + tabHeader.offsetHeight + 8;
-      }
-
-      if (timeoutId) return;
-      setTimeout(() => {
-        obs.disconnect();
-      }, 2_000);
-    });
-
-    obs.observe(pre, { attributes: true, childList: true, subtree: true });
   };
 }
 
