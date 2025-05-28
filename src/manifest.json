@@ -1,5 +1,5 @@
 {
-  "name": "Jira Mermaid",
+  "name": "Mermaid in Jira",
   "description": "Renders mermaid code blocks as a mermaid diagram in Jira.",
   "version": "1.0",
   "manifest_version": 3,
@@ -7,7 +7,7 @@
   "content_scripts": [
     {
       "matches": ["https://*/*"],
-      "include_globs": ["https://*/browse/*"],
+      "include_globs": ["https://*/browse/*", "https://**/boards/*"],
       "css": [],
       "js": ["content-script.js"]
     }

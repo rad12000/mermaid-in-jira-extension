@@ -2,22 +2,16 @@ const mermaidViewHTMLPromise = fetch(
   chrome.runtime.getURL("mermaid-view.html")
 ).then((res) => res.text());
 
-async function checksum(str) {
-  const buffer = new TextEncoder().encode(str);
-  const hashBuffer = await crypto.subtle.digest("SHA-256", buffer);
-  return [...new Uint8Array(hashBuffer)]
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
-
 /**
  * @param {HTMLElement} parent
  * @returns {{elToReplace: HTMLElement, mermaidCode: string}[]}
  */
 function findReadModeCodeBlocks(parent) {
-  const potentialMermaidBlocks = parent.querySelectorAll(
-    ".codeContent.panelContent > code, .codeContent.panelContent > pre, .preformattedContent.panelContent > pre"
-  );
+  const potentialMermaidBlocks = parent.querySelectorAll("code, pre");
+
+  if (!potentialMermaidBlocks) {
+    return;
+  }
 
   /**
    * @type {{elToReplace: HTMLElement, mermaidCode: string}[]}
@@ -37,7 +31,10 @@ function findReadModeCodeBlocks(parent) {
       code.length - mermaidSuffix.length
     );
 
-    block.parentElement.style.padding = "1em";
+    if (block.parentElement.childElementCount === 1) {
+      block.parentElement.style.padding = "1em";
+      block.parentElement.style.display = "block";
+    }
 
     blocks.push({ elToReplace: block, mermaidCode });
   }
@@ -47,21 +44,26 @@ function findReadModeCodeBlocks(parent) {
 
 async function renderMermaidCode(parent = document) {
   const codeBlocks = [findReadModeCodeBlocks].map((fn) => fn(parent)).flat();
+  if (!codeBlocks) return;
 
   const promises = [];
   for (const block of codeBlocks) {
     const details = document.createElement("details");
     const summary = document.createElement("summary");
+    const summaryText = document.createElement("p");
     const div = document.createElement("div");
-
     const title = parseTitle(block.mermaidCode);
 
-    summary.innerText = `${
+    summaryText.innerText = `${
       !title ? "" : title + " - A "
-    }Mermaid Diagram (Powered by the "Jira Mermaid" Chrome Extension)`;
+    }Mermaid Diagram (Powered by the "Mermaid in Jira" Chrome Extension)`;
+    summaryText.style.textOverflow = "ellipsis";
+    summaryText.style.overflow = "hidden";
+    summaryText.style.whiteSpace = "nowrap";
 
+    summary.append(summaryText);
     details.append(summary, div);
-    details.open = false;
+    details.open = true;
     details.onclick = (e) => {
       e.stopPropagation();
     };
@@ -129,6 +131,7 @@ async function enterFullScreen(code) {
   dialog.style.height = "95dvh";
   dialog.style.boxSizing = "border-box";
   dialog.style.padding = "1em";
+  dialog.style.overflow = "hidden";
   document.body.append(dialog);
   await drawMermaidDiagram(dialog, code, {
     fullScreen: true,
@@ -147,12 +150,11 @@ function parseTitle(code) {
   return matches.groups["title"];
 }
 
-let iframeId = 0;
-
 /**
  * @type {Map<number, {afterRender: () => void; beforeRender: () => void; target: HTMLIFrameElement}>}
  */
 const windowIdToHooks = new Map();
+let iframeId = 0;
 
 window.addEventListener("message", (e) => {
   if (Array.isArray(e.data) || typeof e.data !== "object") return;
@@ -168,8 +170,7 @@ window.addEventListener("message", (e) => {
       hooks.afterRender();
       break;
     case "BEFORE_RENDER":
-      if (!hooks.afterRender) return;
-      Promise.resolve(hooks.beforeRender()).then(() => {
+      Promise.resolve((hooks.beforeRender ?? (() => {}))()).then(() => {
         hooks.target.contentWindow.postMessage({ type: "BEFORE_RENDER_ACK" });
       });
       break;
@@ -205,7 +206,7 @@ async function drawMermaidDiagram(
   parent.append(iframe);
 
   if (!fullScreen) {
-    parent.style.aspectRatio = "1 / 1";
+    parent.style.aspectRatio = "2 / 1";
   }
 
   iframe.onload = () => {
@@ -226,25 +227,30 @@ async function drawMermaidDiagram(
   };
 }
 
-function observeIssueContent(issueContent) {
-  const observer = new MutationObserver(() => {
-    renderMermaidCode(issueContent);
+/**
+ *
+ * @param {HTMLElement} parent
+ */
+function observeIssueContent(parent) {
+  const observer = new MutationObserver(async (changes) => {
+    const promises = [];
+    for (const change of changes) {
+      change.addedNodes.forEach((node) => {
+        if (node.nodeType !== 1) return;
+
+        if (node.nodeName !== "PRE" && node.nodeName !== "CODE") {
+          promises.push(renderMermaidCode(node));
+          return;
+        }
+
+        promises.push(renderMermaidCode(node.parentElement));
+      });
+    }
+
+    await Promise.all(promises);
   });
-  observer.observe(issueContent, { childList: true, subtree: true });
+  observer.observe(parent, { childList: true, subtree: true });
 }
 
-const obs = new MutationObserver(() => {
-  // Self hosted use case
-  const issueContent = document.querySelector(".issue-body-content");
-  if (!issueContent) return;
-  obs.disconnect();
-  observeIssueContent(issueContent);
-});
-
-obs.observe(document.body, { childList: true, subtree: true });
-
-setTimeout(() => {
-  obs.disconnect();
-}, 10_000);
-
-renderMermaidCode();
+observeIssueContent(document.body);
+renderMermaidCode(document.body);

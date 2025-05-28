@@ -23,7 +23,6 @@
       }
 
       pre:not(.pre-code) {
-        transform-origin: top left;
         width: 100%;
         height: 100%;
         display: flex;
@@ -141,10 +140,9 @@
       }
 
       #mermaid-code-container {
-        scrollbar-width: none;
         height: 100%;
         width: 100%;
-        overflow: auto;
+        overflow: hidden;
       }
 
       #mermaid-code-container > #error-message {
@@ -214,7 +212,6 @@
           return;
         }
 
-        console.error("posting", msg);
         window.parent.postMessage({ ...msg, windowId });
       }
 
@@ -362,6 +359,19 @@
         pre.style.scale = currentScale + "";
       };
 
+      const getCurrentTranslate = () => {
+        const x = parseInt(pre.getAttribute("x-data-translate-x") ?? "0");
+        const y = parseInt(pre.getAttribute("x-data-translate-y") ?? "0");
+
+        return { x, y };
+      };
+
+      const setTranslate = ({ x, y }) => {
+        pre.setAttribute("x-data-translate-x", x);
+        pre.setAttribute("x-data-translate-y", y);
+        pre.style.translate = `${x}px ${y}px`;
+      };
+
       minusButton.onclick = () => changeScale({ increment: false });
       plusButton.onclick = () => changeScale({ increment: true });
 
@@ -377,6 +387,7 @@
 
       document.getElementById("recenter").onclick = () => {
         changeScale({ scale: 1 });
+        setTranslate({ x: 0, y: 0 });
       };
 
       /**
@@ -393,13 +404,13 @@
       let startY;
       let scrollLeft;
       let scrollTop;
+      let initial;
 
       codeContainer.addEventListener("mousedown", (e) => {
         isDragging = true;
         startX = e.pageX - codeContainer.offsetLeft;
         startY = e.pageY - codeContainer.offsetTop;
-        scrollLeft = codeContainer.scrollLeft;
-        scrollTop = codeContainer.scrollTop;
+        initial = getCurrentTranslate();
       });
 
       codeContainer.addEventListener("mouseleave", () => {
@@ -413,12 +424,148 @@
       codeContainer.addEventListener("mousemove", (e) => {
         if (!isDragging) return;
         e.preventDefault();
-        const x = e.pageX - codeContainer.offsetLeft;
-        const y = e.pageY - codeContainer.offsetTop;
-        const walkX = x - startX;
-        const walkY = y - startY;
-        codeContainer.scrollLeft = scrollLeft - walkX;
-        codeContainer.scrollTop = scrollTop - walkY;
+
+        const currentX = e.pageX - codeContainer.offsetLeft;
+        const currentY = e.pageY - codeContainer.offsetTop;
+        const walkX = currentX - startX;
+        const walkY = currentY - startY;
+        setTranslate({
+          x: walkX + initial.x,
+          y: walkY + initial.y,
+        });
+      });
+    </script>
+
+    <script>
+      function downloadSVG() {
+        const svg = document.querySelector("svg");
+        if (!svg) return;
+
+        const serializer = new XMLSerializer();
+        const svgString = serializer.serializeToString(svg);
+
+        const blob = new Blob([svgString], { type: "image/svg+xml" });
+        const url = URL.createObjectURL(blob);
+
+        // Load into an image
+        const img = new Image();
+        img.onload = function () {
+          const canvas = document.createElement("canvas");
+          canvas.width = svg.width.baseVal.value;
+          canvas.height = svg.height.baseVal.value;
+
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(img, 0, 0);
+
+          // Create a PNG data URL and trigger download
+          const pngUrl = canvas.toDataURL("image/png");
+
+          const link = document.createElement("a");
+          link.href = pngUrl;
+          link.download = "mermaid.png";
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+
+          URL.revokeObjectURL(url);
+        };
+        img.src = url;
+      }
+
+      function openSvgInNewTab() {
+        const svg = document.querySelector("svg");
+        const serializer = new XMLSerializer();
+        const svgString = serializer.serializeToString(svg);
+
+        const blob = new Blob([svgString], { type: "image/svg+xml" });
+        const url = URL.createObjectURL(blob);
+
+        window.open(url, "_blank");
+      }
+
+      document.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+
+        const dialog = document.createElement("dialog");
+        dialog.style.position = "fixed";
+        dialog.style.top = `${e.clientY}px`;
+        dialog.style.left = `${e.clientX}px`;
+        dialog.style.padding = "0.5em";
+        dialog.style.border = "solid #c2c2c2 1px";
+        dialog.style.backgroundColor = "rgb(232 232 232 / 98%)";
+        dialog.style.borderRadius = "5px";
+        dialog.style.boxShadow = "black 0 0 17px -11px";
+        dialog.style.fontFamily = "sans-serif";
+
+        const style = document.createElement("style");
+        style.textContent = `
+            dialog:focus {
+                outline: none;
+            }
+            .body {
+                display: flex;
+                flex-direction: column;
+                gap: 5px;
+            }
+
+            .body > div {
+                padding: 2px 5px;
+                border-radius: 5px;
+            }
+
+            .body > div:hover {
+                background-color: #3b86ff;
+                color: white;
+                cursor: default;
+            }
+        `;
+
+        const body = document.createElement("div");
+        body.classList.add("body");
+
+        const downloadListItem = document.createElement("div");
+        downloadListItem.innerText = "Download PNG";
+        downloadListItem.onclick = () => {
+          downloadSVG();
+        };
+
+        const openInNewTab = document.createElement("div");
+        openInNewTab.innerText = "Open Image in New Tab";
+        openInNewTab.onclick = () => {
+          openSvgInNewTab();
+        };
+
+        body.append(downloadListItem, openInNewTab);
+        dialog.append(style, body);
+        document.body.append(dialog);
+
+        let keyPressListener;
+        let clickListener;
+        let menuListener;
+
+        menuListener = () => {
+          dialog.remove();
+          document.removeEventListener("keypress", keyPressListener);
+          document.removeEventListener("click", clickListener);
+          document.removeEventListener("contextmenu", menuListener);
+        };
+
+        clickListener = (e) => {
+          if (dialog.contains(e.target)) return;
+          menuListener();
+        };
+
+        keyPressListener = (e) => {
+          console.log(e.key);
+          if (e.key !== "Escape") return;
+          menuListener();
+        };
+
+        document.addEventListener("mousedown", clickListener);
+        document.addEventListener("keydown", keyPressListener);
+        document.addEventListener("contextmenu", menuListener);
+
+        dialog.show();
       });
     </script>
   </body>
