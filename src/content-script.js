@@ -7,8 +7,9 @@ const mermaidViewHTMLPromise = fetch(
  * @returns {{elToReplace: HTMLElement, mermaidCode: string}[]}
  */
 function findReadModeCodeBlocks(parent) {
-  const potentialMermaidBlocks = parent.querySelectorAll("code, pre");
+  if (!parent) return;
 
+  const potentialMermaidBlocks = parent.querySelectorAll("code, pre");
   if (!potentialMermaidBlocks) {
     return;
   }
@@ -18,9 +19,10 @@ function findReadModeCodeBlocks(parent) {
    */
   const blocks = [];
   for (const block of potentialMermaidBlocks) {
-    const code = block.textContent;
-
+    let code = block.textContent;
     if (!code) continue;
+    code = code.trim();
+
     const mermaidPrefix = "```mermaid\n";
     const mermaidSuffix = "\n```";
     if (!code.startsWith(mermaidPrefix)) continue;
@@ -42,12 +44,29 @@ function findReadModeCodeBlocks(parent) {
   return blocks;
 }
 
-async function renderMermaidCode(parent = document) {
+async function renderMermaidCode(parent = document.body) {
   const codeBlocks = [findReadModeCodeBlocks].map((fn) => fn(parent)).flat();
   if (!codeBlocks) return;
 
   const promises = [];
   for (const block of codeBlocks) {
+    let potentialContentBlock = block.elToReplace;
+    let shouldCancel = false;
+    while (potentialContentBlock) {
+      if (potentialContentBlock.id !== "description-val") {
+        potentialContentBlock = potentialContentBlock.parentElement;
+        continue;
+      }
+
+      shouldCancel = potentialContentBlock.classList.contains("active");
+      break;
+    }
+
+    if (shouldCancel) {
+      console.debug("looks like we're in active mode, canceling");
+      continue;
+    }
+
     const details = document.createElement("details");
     const summary = document.createElement("summary");
     const summaryText = document.createElement("p");
