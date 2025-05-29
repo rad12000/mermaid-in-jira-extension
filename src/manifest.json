@@ -7,7 +7,11 @@
   "content_scripts": [
     {
       "matches": ["https://*/*"],
-      "include_globs": ["https://*/browse/*", "https://**/boards/*"],
+      "include_globs": [
+        "https://*/browse/*",
+        "https://**/boards/*",
+        "https://**/secure/RapidBoard*"
+      ],
       "css": [],
       "js": ["content-script.js"]
     }
